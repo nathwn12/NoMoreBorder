@@ -45,6 +45,7 @@ selected_app = "0"
 monitors = {}
 selected_monitor = None
 tray_icon = None
+shutdown_event = threading.Event()
 
 # Get monitor info from screeninfo
 for index, m in enumerate(get_monitors()):
@@ -74,7 +75,7 @@ def enum_window_proc(hwnd, resultList):
 def update_window_list():
     global windowList, saveList, selected_app, selected_monitor
 
-    while True:
+    while not shutdown_event.is_set():
         temp = []
         win32gui.EnumWindows(enum_window_proc, temp)
 
@@ -592,41 +593,55 @@ def restore_window():
         )
 
 
+def really_quit():
+    global tray_icon
+    shutdown_event.set()
+    if tray_icon is not None:
+        try:
+            tray_icon.stop()
+        except:
+            pass
+        tray_icon = None
+    try:
+        panel.destroy()
+    except:
+        pass
+
+
 def on_quit(icon, item):
     if icon:
-        icon.stop()
-    panel.after(0, panel.quit)
+        try:
+            icon.stop()
+        except:
+            pass
+    panel.after(0, really_quit)
 
 
 def on_close_window():
     settings = load_settings()
     if settings.get("close_to_tray", True):
-        minimize_to_tray(toast_message=True)
+        minimize_to_tray(show_toast=True)
     else:
-        on_quit(None, None)
+        panel.after(0, really_quit)
 
 
 def on_show(icon, item):
     global tray_icon
-    icon.stop()
+    try:
+        icon.stop()
+    except:
+        pass
+    tray_icon = None
+    panel.after(0, show_window)
 
+
+def show_window():
     panel.geometry(Geometry)
-
-    def do1():
-        panel.attributes("-alpha", 0)
-
-    panel.after(10, do1())
-
+    panel.attributes("-alpha", 0)
     panel.deiconify()
     panel.update_idletasks()
     panel.update()
-
-    def do2():
-        panel.attributes("-alpha", 1)
-
-    panel.after(1000, do2())
-
-    tray_icon = None
+    panel.after(100, lambda: panel.attributes("-alpha", 1))
 
 
 def create_custom_icon():
@@ -639,20 +654,24 @@ def create_custom_icon():
     return image
 
 
-def minimize_to_tray(toast_message=False):
+def minimize_to_tray(show_toast=False):
     global tray_icon
     panel.withdraw()
     if tray_icon is None:
         menu = Menu(MenuItem("Show", on_show), MenuItem("Exit", on_quit))
         tray_icon = Icon("NoMoreBorder", create_custom_icon(), "NoMoreBorder", menu)
 
-        if toast_message:
-            toast(
-                "NoMoreBorder is still running",
-                "The app is now minimized to the system tray.",
-            )
-
         threading.Thread(target=tray_icon.run, daemon=True).start()
+
+        if show_toast:
+            threading.Thread(
+                target=toast,
+                args=(
+                    "NoMoreBorder is still running",
+                    "The app is now minimized to the system tray.",
+                ),
+                daemon=True,
+            ).start()
 
 
 def set_startup(startup):
@@ -706,7 +725,7 @@ panel.grid_columnconfigure(0, weight=1)
 panel.title("NoMoreBorder")
 
 if current_settings.get("start_with_windows", False):
-    minimize_to_tray(toast_message="NoMoreBorder minimized to tray")
+    minimize_to_tray(show_toast=False)
 
 label = ctk.CTkLabel(
     panel,
@@ -832,5 +851,6 @@ Thread(target=update_window_list).start()
 panel.protocol("WM_DELETE_WINDOW", on_close_window)
 panel.mainloop()
 
+shutdown_event.set()
 if tray_icon is not None:
     tray_icon.stop()
